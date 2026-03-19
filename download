@@ -1,0 +1,100 @@
+export type SubscriptionStatut = 'pending' | 'active' | 'expired';
+export type PickStatut = 'en_cours' | 'win' | 'loss' | 'nul';
+export type UserRole = 'tipster' | 'abonne' | 'admin';
+
+export interface Tipster {
+  id: string;
+  username: string;
+  nom: string;
+  description: string;
+  photo: string;
+  sport: string;
+  prix_abonnement: number;
+  payment_connected: boolean;
+  join_code: string;
+  is_suspended: boolean;
+  onboarding_completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Abonne {
+  id: string;
+  email: string;
+  nom: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  tipster_id: string;
+  abonne_id: string;
+  statut: SubscriptionStatut;
+  duree_jours: number;
+  date_activation: string | null;
+  date_expiration: string | null;
+  created_at: string;
+  updated_at: string;
+  tipster?: Tipster;
+  abonne?: Abonne;
+}
+
+export interface Pick {
+  id: string;
+  tipster_id: string;
+  sport: string;
+  match: string;
+  cote: number;
+  mise: number;
+  analyse: string;
+  statut: PickStatut;
+  date_match: string | null;
+  created_at: string;
+  updated_at: string;
+  tipster?: Tipster;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  message: string;
+  read: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TipsterStats {
+  total_picks: number;
+  wins: number;
+  losses: number;
+  nuls: number;
+  en_cours: number;
+  winrate: number;
+  roi: number;
+  current_streak: { type: 'win' | 'loss' | 'none'; count: number };
+  subscribers_count: number;
+}
+
+export interface AdminStats {
+  total_tipsters: number;
+  active_tipsters: number;
+  total_abonnes: number;
+  total_subscriptions_active: number;
+  growth_data: { date: string; tipsters: number; abonnes: number }[];
+}
+
+export interface Database {
+  public: {
+    Tables: {
+      tipsters: { Row: Tipster; Insert: Partial<Tipster> & { id: string; username: string; nom: string }; Update: Partial<Tipster> };
+      abonnes: { Row: Abonne; Insert: Partial<Abonne> & { id: string; email: string; nom: string }; Update: Partial<Abonne> };
+      subscriptions: { Row: Subscription; Insert: Partial<Subscription> & { tipster_id: string; abonne_id: string }; Update: Partial<Subscription> };
+      picks: { Row: Pick; Insert: Partial<Pick> & { tipster_id: string; sport: string; match: string; cote: number }; Update: Partial<Pick> };
+      notifications: { Row: Notification; Insert: Partial<Notification> & { user_id: string; title: string }; Update: Partial<Notification> };
+      admins: { Row: { id: string; created_at: string }; Insert: { id: string }; Update: never };
+    };
+  };
+}

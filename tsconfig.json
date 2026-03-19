@@ -1,0 +1,131 @@
+# TipHub — SaaS Tipsters
+
+Plateforme SaaS pour tipsters sportifs : publie tes pronostics VIP, partage ton QR code, gère tes abonnés.
+
+## Stack
+
+- **Next.js 14** App Router (TypeScript)
+- **Supabase** (PostgreSQL + Auth + RLS + Realtime)
+- **Tailwind CSS** + design system compatible shadcn/ui
+- **Vercel** (deploy + cron)
+
+## Fonctionnalités
+
+### Tipster
+- Onboarding en 3 étapes (profil → prix → récap)
+- Dashboard avec sidebar : Stats / Picks VIP / Abonnés / QR Code / Paramètres
+- Publication de picks VIP (sport, match, cote, mise 1-5⭐, analyse, date/heure)
+- Stats auto : ROI, winrate, série en cours, total picks
+- QR Code unique à partager (génération + téléchargement PNG)
+- Activation manuelle des abonnés (7j / 30j / 90j)
+- Notifications in-app (nouvel abonné en attente)
+
+### Abonné
+- Inscription via QR code → lié automatiquement au tipster (statut pending)
+- Feed chronologique des picks avec Realtime (mise à jour instantanée)
+- Filtres sport / statut
+- Badge "NOUVEAU" sur les picks frais
+- Page /explore pour découvrir des tipsters (tri ROI, winrate, filtre sport)
+
+### Pages publiques
+- `/{username}` : profil tipster avec stats publiques, picks floutés si non abonné
+- Messages contextuels : "en attente", "expiré", "contenu réservé"
+- SEO : meta dynamiques par tipster, sitemap auto
+
+### Admin
+- Dashboard `/admin` protégé par middleware + table `admins`
+- Stats globales (tipsters, abonnés, abonnements actifs)
+- Gestion tipsters (suspendre / supprimer)
+- Export CSV des abonnements du mois
+
+### Sécurité
+- RLS sur TOUTES les tables (tipsters, abonnés, subscriptions, picks, notifications, admins)
+- Middleware Next.js : protection `/dashboard/*` et `/admin`
+- Aucune clé secrète côté client (seulement `NEXT_PUBLIC_*`)
+- Cron protégé par `CRON_SECRET`
+
+## Architecture
+
+```
+tiphub/
+├── app/
+│   ├── page.tsx                         # Landing (hero + 3 étapes + CTA)
+│   ├── sitemap.ts                       # Sitemap auto
+│   ├── explore/page.tsx                 # Découvrir les tipsters
+│   ├── auth/login|register/…            # Auth (tipster 3 étapes, abonné)
+│   ├── dashboard/tipster/               # Dashboard tipster (sidebar)
+│   ├── dashboard/abonne/                # Dashboard abonné (feed + realtime)
+│   ├── admin/                           # Admin dashboard
+│   ├── tipster-profile/[username]/      # Profil public
+│   │   └── join/[code]/                 # Inscription via QR
+│   └── api/cron/expire/                 # Cron expiration
+├── lib/
+│   ├── subscriptions.ts                 # ⭐ SEUL fichier paiement
+│   ├── picks.ts                         # CRUD picks + stats
+│   ├── auth.ts                          # Détection rôle
+│   ├── qr.ts                            # Génération QR
+│   ├── notifications.ts                 # Notifications helpers
+│   └── supabase/client.ts|server.ts
+├── types/index.ts
+├── supabase/migration.sql               # Schema complet + RLS
+├── middleware.ts                         # Protection routes
+├── vercel.json                          # Cron config
+└── next.config.js                       # Rewrites /{username}
+```
+
+## Setup rapide
+
+### 1. Clone et install
+
+```bash
+git clone <ton-repo>
+cd tiphub
+npm install
+```
+
+### 2. Supabase
+
+1. Crée un projet sur [supabase.com](https://supabase.com)
+2. Va dans **SQL Editor** → colle le contenu de `supabase/migration.sql` → Run
+3. Va dans **Authentication > URL Configuration** → ajoute `http://localhost:3000/auth/callback`
+4. (Optionnel) Active `pg_cron` dans Extensions pour l'expiration auto
+
+### 3. Environment
+
+```bash
+cp .env.example .env.local
+```
+
+Remplis les clés depuis **Supabase > Settings > API**.
+
+### 4. Lance
+
+```bash
+npm run dev
+```
+
+→ [http://localhost:3000](http://localhost:3000)
+
+### 5. Créer un admin
+
+Dans le SQL Editor de Supabase, après avoir créé un compte :
+```sql
+INSERT INTO public.admins (id) VALUES ('ton-user-id-ici');
+```
+
+## Déploiement Vercel
+
+1. Push sur GitHub
+2. Importe dans Vercel
+3. Ajoute les variables d'env (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET`)
+4. Mets à jour les Redirect URLs dans Supabase avec ton domaine Vercel
+5. Le cron `/api/cron/expire` tourne auto toutes les 15 minutes
+
+## Intégration paiement future
+
+**Seul fichier à modifier : `/lib/subscriptions.ts`**
+
+1. `createSubscription()` → déjà en statut `pending`
+2. Ajouter vérification paiement dans `activateSubscription()`
+3. Décommenter `verifyPayment()` et `handleWebhook()`
+4. Créer `/api/webhooks/stripe` ou `/api/webhooks/paypal`

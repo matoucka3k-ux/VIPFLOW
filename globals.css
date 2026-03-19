@@ -1,0 +1,448 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
+import { getJoinUrl, getQrCodeUrl, getQrCodePngUrl } from '@/lib/qr';
+import type { Tipster, Pick as PickType, TipsterStats, PickStatut, Subscription } from '@/types';
+
+const STATUT_STYLES: Record<PickStatut, string> = {
+  en_cours: 'bg-blue-50 text-blue-700', win: 'bg-emerald-50 text-emerald-700',
+  loss: 'bg-red-50 text-red-700', nul: 'bg-gray-50 text-gray-600',
+};
+const STATUT_LABELS: Record<PickStatut, string> = {
+  en_cours: 'En cours', win: 'Win ✓', loss: 'Loss ✗', nul: 'Nul',
+};
+
+const SIDEBAR_ITEMS = [
+  { key: 'dashboard', label: 'Dashboard', icon: '📊' },
+  { key: 'picks', label: 'Mes VIP', icon: '🎯' },
+  { key: 'subscribers', label: 'Mes abonnés', icon: '👥' },
+  { key: 'qr', label: 'QR Code', icon: '📱' },
+  { key: 'settings', label: 'Paramètres', icon: '⚙️' },
+];
+
+interface Props {
+  tipster: Tipster;
+  initialPicks: PickType[];
+  stats: TipsterStats;
+  subscribers: Subscription[];
+}
+
+export default function TipsterDashboardClient({ tipster, initialPicks, stats, subscribers }: Props) {
+  const [tab, setTab] = useState('dashboard');
+  const [picks, setPicks] = useState<PickType[]>(initialPicks);
+  const [subs, setSubs] = useState<Subscription[]>(subscribers);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [activateDuration, setActivateDuration] = useState<Record<string, number>>({});
+  const [form, setForm] = useState({ sport: tipster.sport, match: '', cote: '', mise: '3', analyse: '', date_match: '' });
+  const [notifCount, setNotifCount] = useState(0);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const supabase = createClient();
+
+  const joinUrl = getJoinUrl(tipster.username, tipster.join_code);
+
+  // Fetch notification count
+  useEffect(() => {
+    supabase.from('notifications').select('*', { count: 'exact', head: true })
+      .eq('user_id', tipster.id).eq('read', false)
+      .then(({ count }) => setNotifCount(count || 0));
+  }, []);
+
+  // Show QR tab if just completed onboarding
+  useEffect(() => {
+    if (searchParams.get('onboarding') === 'complete') setTab('qr');
+  }, [searchParams]);
+
+  const handleNewPick = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    const { data, error } = await supabase.from('picks').insert({
+      tipster_id: tipster.id, sport: form.sport, match: form.match,
+      cote: parseFloat(form.cote), mise: parseInt(form.mise),
+      analyse: form.analyse, statut: 'en_cours' as PickStatut,
+      date_match: form.date_match || null,
+    }).select().single();
+
+    if (!error && data) {
+      setPicks([data as PickType, ...picks]);
+      setForm({ sport: tipster.sport, match: '', cote: '', mise: '3', analyse: '', date_match: '' });
+      setShowForm(false);
+    }
+    setLoading(false);
+  };
+
+  const updateStatus = async (pickId: string, statut: PickStatut) => {
+    const { error } = await supabase.from('picks').update({ statut }).eq('id', pickId);
+    if (!error) setPicks(picks.map(p => p.id === pickId ? { ...p, statut } : p));
+  };
+
+  const activateSub = async (subId: string) => {
+    setActivatingId(subId);
+    const duration = activateDuration[subId] || 30;
+    const now = new Date();
+    const exp = new Date(now.getTime() + duration * 24 * 60 * 60 * 1000);
+
+    const { error } = await supabase.from('subscriptions').update({
+      statut: 'active', duree_jours: duration,
+      date_activation: now.toISOString(), date_expiration: exp.toISOString(),
+    }).eq('id', subId);
+
+    if (!error) {
+      setSubs(subs.map(s => s.id === subId ? { ...s, statut: 'active', duree_jours: duration, date_activation: now.toISOString(), date_expiration: exp.toISOString() } : s));
+      // Notify abonné
+      const sub = subs.find(s => s.id === subId);
+      if (sub) {
+        await supabase.from('notifications').insert({
+          user_id: sub.abonne_id, type: 'subscription_activated',
+          title: 'Abonnement activé !',
+          message: `${tipster.nom} a activé votre abonnement pour ${duration} jours.`,
+        });
+      }
+    }
+    setActivatingId(null);
+  };
+
+  const handleLogout = async () => { await supabase.auth.signOut(); router.push('/'); };
+
+  const pendingSubs = subs.filter(s => s.statut === 'pending');
+  const activeSubs = subs.filter(s => s.statut === 'active');
+  const expiredSubs = subs.filter(s => s.statut === 'expired');
+
+  return (
+    <div className="min-h-screen flex bg-background">
+      {/* Sidebar */}
+      <aside className="w-64 bg-[hsl(var(--sidebar))] text-[hsl(var(--sidebar-foreground))] flex flex-col shrink-0 sticky top-0 h-screen">
+        <div className="px-6 h-16 flex items-center border-b border-white/10">
+          <span className="text-xl font-bold"><span className="text-primary">Tip</span>Hub</span>
+        </div>
+        <nav className="flex-1 px-3 py-4 space-y-1">
+          {SIDEBAR_ITEMS.map(item => (
+            <button key={item.key} onClick={() => setTab(item.key)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                tab === item.key ? 'bg-white/10 text-white font-medium' : 'text-white/60 hover:text-white/80 hover:bg-white/5'
+              }`}>
+              <span>{item.icon}</span>
+              <span>{item.label}</span>
+              {item.key === 'subscribers' && pendingSubs.length > 0 && (
+                <span className="ml-auto bg-accent text-accent-foreground text-xs font-bold px-2 py-0.5 rounded-full">{pendingSubs.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="p-4 border-t border-white/10">
+          <div className="text-sm text-white/60 truncate mb-2">{tipster.nom}</div>
+          <button onClick={handleLogout} className="text-xs text-white/40 hover:text-white/60 transition-colors">Déconnexion</button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main className="flex-1 min-w-0">
+        {/* Top bar */}
+        <header className="h-16 border-b border-border px-8 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-40">
+          <h1 className="text-lg font-semibold">{SIDEBAR_ITEMS.find(i => i.key === tab)?.label}</h1>
+          <div className="flex items-center gap-3">
+            {notifCount > 0 && (
+              <span className="bg-destructive text-destructive-foreground text-xs font-bold px-2 py-1 rounded-full">{notifCount} notif{notifCount > 1 ? 's' : ''}</span>
+            )}
+            <span className="text-sm text-muted-foreground">@{tipster.username}</span>
+          </div>
+        </header>
+
+        <div className="p-8">
+          {/* ===== DASHBOARD ===== */}
+          {tab === 'dashboard' && (
+            <div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                {[
+                  { label: 'Total picks', value: stats.total_picks },
+                  { label: 'Winrate', value: `${stats.winrate}%`, color: 'text-emerald-600' },
+                  { label: 'ROI', value: `${stats.roi > 0 ? '+' : ''}${stats.roi}%`, color: stats.roi >= 0 ? 'text-emerald-600' : 'text-red-600' },
+                  { label: 'Abonnés actifs', value: stats.subscribers_count, color: 'text-primary' },
+                ].map(s => (
+                  <div key={s.label} className="border border-border rounded-xl p-5">
+                    <p className="text-sm text-muted-foreground">{s.label}</p>
+                    <p className={`text-2xl font-bold mt-1 ${s.color || ''}`}>{s.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Streak + breakdown */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-8">
+                <div className={`rounded-lg p-4 text-center ${stats.current_streak.type === 'win' ? 'bg-emerald-50 text-emerald-700' : stats.current_streak.type === 'loss' ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-600'}`}>
+                  <p className="text-2xl font-bold">{stats.current_streak.count}</p>
+                  <p className="text-xs font-medium">Série {stats.current_streak.type === 'win' ? 'W' : stats.current_streak.type === 'loss' ? 'L' : '-'}</p>
+                </div>
+                {[
+                  { label: 'En cours', value: stats.en_cours, cls: 'bg-blue-50 text-blue-700' },
+                  { label: 'Wins', value: stats.wins, cls: 'bg-emerald-50 text-emerald-700' },
+                  { label: 'Losses', value: stats.losses, cls: 'bg-red-50 text-red-700' },
+                  { label: 'Nuls', value: stats.nuls, cls: 'bg-gray-50 text-gray-600' },
+                ].map(i => (
+                  <div key={i.label} className={`rounded-lg p-4 text-center ${i.cls}`}>
+                    <p className="text-2xl font-bold">{i.value}</p>
+                    <p className="text-xs font-medium">{i.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Recent picks */}
+              <h3 className="font-semibold mb-3">Derniers picks</h3>
+              <div className="space-y-2">
+                {picks.slice(0, 5).map(pick => (
+                  <div key={pick.id} className="border border-border rounded-lg p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUT_STYLES[pick.statut]}`}>{STATUT_LABELS[pick.statut]}</span>
+                      <span className="font-medium text-sm">{pick.match}</span>
+                    </div>
+                    <div className="text-sm font-bold">{pick.cote}</div>
+                  </div>
+                ))}
+                {picks.length === 0 && <p className="text-muted-foreground text-sm py-8 text-center">Aucun pick publié.</p>}
+              </div>
+            </div>
+          )}
+
+          {/* ===== PICKS (VIP) ===== */}
+          {tab === 'picks' && (
+            <div>
+              <div className="flex items-center justify-between mb-6">
+                <p className="text-sm text-muted-foreground">{picks.length} pick{picks.length > 1 ? 's' : ''} publiés</p>
+                <button onClick={() => setShowForm(!showForm)}
+                  className="bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+                  {showForm ? 'Annuler' : '+ Nouveau pick VIP'}
+                </button>
+              </div>
+
+              {showForm && (
+                <form onSubmit={handleNewPick} className="border border-border rounded-xl p-6 mb-6 space-y-4">
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Sport</label>
+                      <input value={form.sport} onChange={e => setForm({...form, sport: e.target.value})} required
+                        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Match</label>
+                      <input value={form.match} onChange={e => setForm({...form, match: e.target.value})} required placeholder="PSG vs Marseille"
+                        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Date/Heure match</label>
+                      <input type="datetime-local" value={form.date_match} onChange={e => setForm({...form, date_match: e.target.value})}
+                        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Cote</label>
+                      <input type="number" step="0.01" min="1" value={form.cote} onChange={e => setForm({...form, cote: e.target.value})} required
+                        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1.5">Mise (1-5 ⭐)</label>
+                      <div className="flex gap-2 mt-1">
+                        {[1,2,3,4,5].map(n => (
+                          <button key={n} type="button" onClick={() => setForm({...form, mise: String(n)})}
+                            className={`w-10 h-10 rounded-lg text-sm font-bold transition-colors ${
+                              parseInt(form.mise) >= n ? 'bg-accent text-accent-foreground' : 'bg-secondary text-muted-foreground'
+                            }`}>⭐</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5">Analyse</label>
+                    <textarea value={form.analyse} onChange={e => setForm({...form, analyse: e.target.value})} rows={3}
+                      className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+                      placeholder="Votre analyse détaillée..." />
+                  </div>
+                  <button type="submit" disabled={loading}
+                    className="bg-primary text-primary-foreground px-6 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+                    {loading ? 'Publication...' : 'Publier le pick VIP'}
+                  </button>
+                </form>
+              )}
+
+              <div className="space-y-3">
+                {picks.map(pick => (
+                  <div key={pick.id} className="border border-border rounded-xl p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-xs font-medium px-2 py-0.5 rounded bg-secondary">{pick.sport}</span>
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUT_STYLES[pick.statut]}`}>{STATUT_LABELS[pick.statut]}</span>
+                          {pick.date_match && (
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(pick.date_match).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="font-semibold mt-2">{pick.match}</h3>
+                        {pick.analyse && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{pick.analyse}</p>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-lg font-bold">{pick.cote}</div>
+                        <div className="flex gap-0.5 justify-end mt-1">
+                          {Array.from({length: pick.mise}).map((_, i) => <span key={i} className="text-xs">⭐</span>)}
+                        </div>
+                      </div>
+                    </div>
+                    {pick.statut === 'en_cours' && (
+                      <div className="flex gap-2 mt-4 pt-4 border-t border-border">
+                        <button onClick={() => updateStatus(pick.id, 'win')} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100">✓ Win</button>
+                        <button onClick={() => updateStatus(pick.id, 'loss')} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-50 text-red-700 hover:bg-red-100">✗ Loss</button>
+                        <button onClick={() => updateStatus(pick.id, 'nul')} className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-600 hover:bg-gray-100">○ Nul</button>
+                      </div>
+                    )}
+                    <div className="text-xs text-muted-foreground mt-3">
+                      {new Date(pick.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                ))}
+                {picks.length === 0 && (
+                  <div className="text-center py-16 border border-dashed border-border rounded-xl">
+                    <p className="text-muted-foreground">Aucun pick publié.</p>
+                    <button onClick={() => setShowForm(true)} className="mt-3 text-primary font-medium text-sm hover:underline">Publier votre premier pick →</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ===== SUBSCRIBERS ===== */}
+          {tab === 'subscribers' && (
+            <div>
+              {/* Pending */}
+              {pendingSubs.length > 0 && (
+                <div className="mb-8">
+                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+                    En attente <span className="bg-accent text-accent-foreground text-xs font-bold px-2 py-0.5 rounded-full">{pendingSubs.length}</span>
+                  </h3>
+                  <div className="space-y-3">
+                    {pendingSubs.map(sub => (
+                      <div key={sub.id} className="border border-accent/30 bg-accent/5 rounded-xl p-5 flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-sm">{(sub.abonne as any)?.nom || 'Abonné'}</p>
+                          <p className="text-xs text-muted-foreground">{(sub.abonne as any)?.email}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Inscrit le {new Date(sub.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select value={activateDuration[sub.id] || 30}
+                            onChange={e => setActivateDuration({...activateDuration, [sub.id]: parseInt(e.target.value)})}
+                            className="px-2 py-1.5 rounded-lg border border-input bg-background text-xs">
+                            <option value={7}>7 jours</option>
+                            <option value={30}>30 jours</option>
+                            <option value={90}>90 jours</option>
+                          </select>
+                          <button onClick={() => activateSub(sub.id)} disabled={activatingId === sub.id}
+                            className="bg-primary text-primary-foreground px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+                            {activatingId === sub.id ? '...' : 'Activer'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Active */}
+              <h3 className="font-semibold mb-3">Actifs ({activeSubs.length})</h3>
+              {activeSubs.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">Aucun abonné actif.</p>
+              ) : (
+                <div className="space-y-2 mb-8">
+                  {activeSubs.map(sub => (
+                    <div key={sub.id} className="border border-border rounded-lg p-4 flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-sm">{(sub.abonne as any)?.nom || 'Abonné'}</p>
+                        <p className="text-xs text-muted-foreground">{(sub.abonne as any)?.email}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs font-medium bg-emerald-50 text-emerald-700 px-2 py-1 rounded">Actif</span>
+                        {sub.date_expiration && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Expire le {new Date(sub.date_expiration).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Expired */}
+              {expiredSubs.length > 0 && (
+                <>
+                  <h3 className="font-semibold mb-3 text-muted-foreground">Expirés ({expiredSubs.length})</h3>
+                  <div className="space-y-2 opacity-60">
+                    {expiredSubs.map(sub => (
+                      <div key={sub.id} className="border border-border rounded-lg p-4 flex items-center justify-between">
+                        <p className="font-medium text-sm">{(sub.abonne as any)?.nom || 'Abonné'}</p>
+                        <span className="text-xs text-muted-foreground">Expiré</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ===== QR CODE ===== */}
+          {tab === 'qr' && (
+            <div className="max-w-lg">
+              <p className="text-sm text-muted-foreground mb-6">
+                Partagez ce QR code pour permettre à vos abonnés de s'inscrire directement sur votre espace.
+              </p>
+
+              <div className="border border-border rounded-xl p-8 text-center mb-6">
+                <img src={getQrCodeUrl(joinUrl)} alt="QR Code" className="w-64 h-64 mx-auto mb-4" />
+                <p className="text-sm font-mono text-muted-foreground break-all">{joinUrl}</p>
+              </div>
+
+              <div className="flex gap-3">
+                <a href={getQrCodePngUrl(joinUrl, 800)} download={`tiphub-${tipster.username}-qr.png`} target="_blank"
+                  className="flex-1 bg-primary text-primary-foreground py-2.5 rounded-lg font-medium text-center text-sm hover:bg-primary/90 transition-colors">
+                  Télécharger PNG
+                </a>
+                <button onClick={() => { navigator.clipboard.writeText(joinUrl); }}
+                  className="flex-1 border border-border py-2.5 rounded-lg font-medium text-sm hover:bg-secondary transition-colors">
+                  Copier le lien
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ===== SETTINGS ===== */}
+          {tab === 'settings' && (
+            <div className="max-w-lg">
+              <p className="text-sm text-muted-foreground mb-6">Modifiez votre profil public.</p>
+              <div className="border border-border rounded-xl p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Nom</label>
+                  <input defaultValue={tipster.nom} className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Description</label>
+                  <textarea defaultValue={tipster.description} rows={3} className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm resize-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">Prix (€/mois)</label>
+                  <input type="number" step="0.01" defaultValue={tipster.prix_abonnement} className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm" />
+                </div>
+                <button className="bg-primary text-primary-foreground px-6 py-2 rounded-lg text-sm font-medium hover:bg-primary/90">
+                  Sauvegarder
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
