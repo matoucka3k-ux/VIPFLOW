@@ -1,57 +1,30 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr';
-import { NextResponse, type NextRequest } from 'next/server';
-
-export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request: { headers: request.headers } });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) { return request.cookies.get(name)?.value; },
-        set(name: string, value: string, options: CookieOptions) {
-          request.cookies.set({ name, value, ...options });
-          response = NextResponse.next({ request: { headers: request.headers } });
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name: string, options: CookieOptions) {
-          request.cookies.set({ name, value: '', ...options });
-          response = NextResponse.next({ request: { headers: request.headers } });
-          response.cookies.set({ name, value: '', ...options });
-        },
-      },
-    }
-  );
-
-  const { data: { user } } = await supabase.auth.getUser();
-  const { pathname } = request.nextUrl;
-
-  // Protected: /dashboard/* and /admin
-  if ((pathname.startsWith('/dashboard') || pathname.startsWith('/admin')) && !user) {
-    return NextResponse.redirect(new URL('/auth/login', request.url));
+{
+  "name": "tiphub",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10",
+    "geist": "^1.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.14",
+    "postcss": "^8.4.47",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "14.2.15"
   }
-
-  // Admin protection
-  if (pathname.startsWith('/admin') && user) {
-    const { data: admin } = await supabase.from('admins').select('id').eq('id', user.id).maybeSingle();
-    if (!admin) {
-      return NextResponse.redirect(new URL('/', request.url));
-    }
-  }
-
-  // Auth routes — redirect if already logged in
-  if (pathname.startsWith('/auth') && user) {
-    const { data: admin } = await supabase.from('admins').select('id').eq('id', user.id).maybeSingle();
-    if (admin) return NextResponse.redirect(new URL('/admin', request.url));
-
-    const { data: tipster } = await supabase.from('tipsters').select('id').eq('id', user.id).maybeSingle();
-    return NextResponse.redirect(new URL(tipster ? '/dashboard/tipster' : '/dashboard/abonne', request.url));
-  }
-
-  return response;
 }
-
-export const config = {
-  matcher: ['/dashboard/:path*', '/auth/:path*', '/admin/:path*'],
-};
